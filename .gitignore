@@ -1,0 +1,21 @@
+# ===== Python =====
+__pycache__/
+*.pyc
+*.pyo
+
+# ===== Virtual Env =====
+.venv/
+venv/
+
+# ===== Data / Model =====
+data/
+*.csv
+*.pkl
+
+# ===== Logs / Output =====
+analysis_result/
+*.log
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
