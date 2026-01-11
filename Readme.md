@@ -1,137 +1,164 @@
-# Machine Learning of Ping Pong (PAIA + Random Forest)
+# Ping Pong AI Agent using Random Forest (PAIA Desktop)
 
-本專案基於 **PAIA Desktop 平台**，針對 **乒乓球對戰遊戲** 設計一套  
-以 **Random Forest** 為核心的機器學習流程，目標是在 **FPS = 30** 條件下：
+## 專案介紹
+本專案使用 **PAIA Desktop 乒乓球對戰平台**蒐集遊戲資料，  
+以 **Random Forest** 建立機器學習模型，控制平台左右移動進行對戰。
 
-- 對打速度穩定（> 30）
-- 高速球情境下仍具備高準度
-- 採用「低誤差、高容錯」的模型訓練策略
-- 支援快速資料蒐集與快速模型迭代
+系統採用 **雙模型（Dual-head）設計**：
+- **Classifier**：預測離散動作（MOVE_LEFT / MOVE_RIGHT / NONE）
+- **Regressor**：預測球落點（target x position）
 
----
+透過資料清洗、特徵工程與推論階段的容錯策略（rule-based fallback + dynamic tolerance），  
+在 **FPS = 30 的即時限制下**，達成穩定對戰效果。
 
-## 一、專案目標（Design Goals）
-
-- 使用 **PAIA Desktop** 進行資料蒐集與對戰
-- 使用 **Random Forest（Classifier + Regressor）**
-- 強化 **hard / 高速擊球** 情境表現
-- 訓練與推論流程完全分離、可重現
-- 不依賴 GPU / torch（CPU 即可完成訓練與推論）
+### 驗收指標
+- **Normal 對戰模式可獲勝**
+- **勝率達到 ≥ 70%**
 
 ---
 
-## 二、專案結構說明
-
-PINGPONG2/
-│
-├─ collect/
-│ ├─ 蒐集.py # 標準資料蒐集器（PAIA Desktop 使用）
-│ ├─ 蒐集_fast.py # 高速資料蒐集器（建議使用）
-│ ├─ ml_play.py # 對戰 AI（讀取 model.pkl）
-│ ├─ train_model_fast.py # 快速訓練腳本（輸出 model.pkl）
-│ ├─ model.pkl # 訓練完成後產生的模型
-│ └─ data/
-│ ├─ pingpong_dataset.csv
-│ └─ pingpong_fast_*.csv
-│
-├─ project.json # PAIA Desktop 專案設定
-└─ README.md
+## 專案功能
+- **資料蒐集（Collector）**
+  - 從 PAIA Desktop 提供的 `scene_info` 擷取遊戲狀態
+  - 將狀態與對應動作轉為 CSV 資料集
+- **模型訓練（Trainer）**
+  - 合併多個 CSV
+  - 進行資料清洗與加權
+  - 訓練 Random Forest Classifier + Regressor
+- **即時推論（MLPlay Agent）**
+  - 載入訓練完成的 `model.pkl`
+  - 根據速度與距離進行 gating 決策
+  - 結合規則式容錯，避免慢球或高速情境失誤
+- **訓練可視化分析**
+  - 產生速度分佈、混淆矩陣、回歸誤差等圖表
 
 ---
 
-## 三、資料格式（CSV Schema）
+## 系統限制與效能目標
+- **即時性限制**：FPS = 30，推論延遲需極低
+- **穩定性需求**
+  - 高速球不可抖動
+  - 低速球不可慢半拍
+- **驗收條件**
+  - Normal 模式勝率 ≥ 70%
 
-所有訓練資料必須符合以下欄位（順序不影響，但名稱必須一致）：
+---
 
-```text
-ball_x, ball_y,
-speed_x, speed_y,
-time_to_hit,
-pred_x,
-my_x,
-blocker_x, blocker_y,
-action
+## 系統分析（模組與資料流）
+```mermaid
+flowchart TD
+A[PAIA Desktop PingPong Engine] --> B[scene_info]
+B --> C[Collector 蒐集_fast.py]
+C --> D[data/*.csv]
+D --> E[Trainer train_fast.py]
+E --> F[model.pkl]
+F --> G[MLPlay Agent ml_play.py]
+G --> A
+E --> H[Analyzer analyze_training.py]
+H --> I[analysis_result/*.png]
 ```
 
-| 欄位                   | 說明                            |
-| -------------------- | ----------------------------- |
-| ball_x, ball_y       | 球目前座標                         |
-| speed_x, speed_y     | 球速度（frame 差分）                 |
-| time_to_hit          | 球到達我方平台的預估時間                  |
-| pred_x               | 預測落點 x                        |
-| my_x                 | 我方平台左上角 x                     |
-| blocker_x, blocker_y | 障礙物座標（無則為 -100）               |
-| action               | MOVE_LEFT / MOVE_RIGHT / NONE |
+---
 
-## 四、資料蒐集（PAIA Desktop）
+## 專案架構（Phase-based）
+```mermaid
+flowchart TD
 
-標準蒐集
+%% =============================
+%% Phase 1: Data Collection
+%% =============================
+subgraph P1[Phase 1：資料蒐集（PAIA Desktop）]
+    A[PAIA PingPong Game Engine]
+    B[scene_info<br/>球、平台、障礙物、狀態]
+    C[Collector<br/>蒐集_fast.py]
+    D[CSV Dataset<br/>data/*.csv]
 
-- 使用：collect/蒐集.py
-- 特性：
-  - 高速球優先保存
-  - 一個 CSV 累積資料
+    A --> B
+    B --> C
+    C --> D
+end
 
-建議使用：高速蒐集
-- 使用：collect/蒐集_fast.py
-- 特性：
-  - 高速球 + 近擊球區 100% 保存
-  - NONE 樣本大幅減少
-  - 每次啟動自動產生新 CSV
-  - 單場資料量約為標準版的 3~5 倍
-  
-在 PAIA Desktop 中選擇 AI 腳本為：collect/蒐集_fast.py
+%% =============================
+%% Phase 2: Training
+%% =============================
+subgraph P2[Phase 2：模型訓練（Random Forest）]
+    D --> E[資料清洗與特徵工程<br/>train_fast.py]
+    E --> F1[RF Classifier<br/>Action Prediction]
+    E --> F2[RF Regressor<br/>Target X Prediction]
+    F1 --> G[Model Payload<br/>model.pkl]
+    F2 --> G
+end
 
-## 五、快速訓練（Random Forest）
+%% =============================
+%% Phase 3: Inference & Evaluation
+%% =============================
+subgraph P3[Phase 3：即時推論與評估]
+    G --> H[MLPlay Agent<br/>ml_play.py]
+    H --> I[Gating Strategy<br/>High-speed → Regressor]
+    H --> J[Rule-based Fallback<br/>Dynamic Tolerance]
+    I --> K[Action Output]
+    J --> K
+    K --> A
+end
 
-使用腳本:
-`collect/train_model_fast.py`
+%% =============================
+%% Analysis
+%% =============================
+E --> L[Training Analyzer<br/>analyze_training.py]
+L --> M[Analysis Result<br/>Confusion Matrix / Error Plot]
 
-特點
-- 支援 data/*.csv 多 CSV 合併訓練
-- 自動資料清洗
-- 高速樣本加權（提升 hard 情境準度）
-- 同時訓練：
-  - RandomForestClassifier（預測 action）
-  - RandomForestRegressor（預測落點 x）
-- 輸出：
-  - `collect/model.pkl`
-- 訓練輸出範例
-  ```yaml
-  raw rows: 2571
-  clean rows: 2426
-  [Classifier] acc=0.93
-  [Regressor ] pred_x MAE=1.52
-  Saved: model.pkl
-  ```
-
-## 六、對戰（使用訓練好的模型）
-對戰 AI
-```bash
-collect/ml_play.py
 ```
-特性
-- 自動載入同層 model.pkl
-- 支援：
-    - 舊版單模型 .pkl
-    - 新版 dict payload（clf + reg）
-- 高速 / 近擊球：
-    - 優先使用 regressor（連續、穩定）
-- 一般情境：
-    - 使用 classifier
-- 永遠保留 rule-based fallback（高容錯）
 
-## 七、建議工作流程（Best Practice）
-快速迭代流程
-1. 使用 蒐集_fast.py 收資料 2–3 分鐘
-2. 執行 train_model_fast.py
-3. 使用 ml_play.py 對戰測試
-4. 重複 2–3 次
+---
 
-**通常 第 2–3 輪模型即可穩定壓過內建（hard**
+## API 規格表
 
-## 八、環境需求
+### MLPlay Agent API（ml_play.py)
 
-- Python 3.9+
-- numpy, pandas, scikit-learn
-- PAIA Desktop
+| 項目    | 說明                      |
+| ----- | ----------------------- |
+| Class | `MLPlay`                |
+| 用途    | PAIA Desktop 的 AI Agent |
+
+| Method                         | Input            | Output      | 說明                 |
+| ------------------------------ | ---------------- | ----------- | ------------------ |
+| `__init__(ai_name)`            | ai_name: str     | None        | 初始化 Agent（1P / 2P） |
+| `update(scene_info, keyboard)` | scene_info: dict | action: str | 根據遊戲狀態輸出動作         |
+| `reset()`                      | None             | None        | 遊戲結束時重置狀態          |
+
+### action 輸出規格
+| Method                         | Input            | Output      | 說明                 |
+| ------------------------------ | ---------------- | ----------- | ------------------ |
+| `__init__(ai_name)`            | ai_name: str     | None        | 初始化 Agent（1P / 2P） |
+| `update(scene_info, keyboard)` | scene_info: dict | action: str | 根據遊戲狀態輸出動作         |
+| `reset()`                      | None             | None        | 遊戲結束時重置狀態          |
+
+### 訓練腳本 API（train_fast.py）
+| 參數               | 型別    | 說明             |
+| ---------------- | ----- | -------------- |
+| `--data_dir`     | str   | CSV 資料夾路徑      |
+| `--sample_n`     | int   | 抽樣訓練筆數（0 表示全量） |
+| `--tth_max_keep` | float | time_to_hit 上限 |
+| `--model_path`   | str   | 輸出模型路徑         |
+
+### Model Payload（model.pkl）
+```python
+payload = {
+    "feature_cols": List[str],
+    "clf": RandomForestClassifier,
+    "reg": RandomForestRegressor,
+    "meta": {
+        "rows_used": int,
+        "seed": int,
+        "sample_n": Optional[int],
+        "tth_max_keep": float
+    }
+}
+
+```
+| Key            | 說明       |
+| -------------- | -------- |
+| `feature_cols` | 特徵欄位順序   |
+| `clf`          | 動作分類模型   |
+| `reg`          | 落點回歸模型   |
+| `meta`         | 訓練設定與資料量 |
